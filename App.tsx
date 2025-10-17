@@ -2,16 +2,28 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
 */
-import React, {useCallback, useState} from 'react';
+import React, {useCallback, useState, useEffect} from 'react';
+import ApiKeyDialog from './components/ApiKeyDialog';
 import {CurvedArrowDownIcon} from './components/icons';
 import LoadingIndicator from './components/LoadingIndicator';
 import PromptForm from './components/PromptForm';
 import VideoResult from './components/VideoResult';
 import {generateVideo} from './services/geminiService';
-import {
-  AppState,
-  GenerateVideoParams,
-} from './types';
+import {AppState, GenerateVideoParams} from './types';
+
+// Type definition for aistudio object if not globally available
+// FIX: The error "Subsequent property declarations must have the same type" indicates
+// that a global type `AIStudio` is expected for `window.aistudio`. Defining and using
+// a named interface resolves this conflict.
+declare global {
+  interface AIStudio {
+    hasSelectedApiKey: () => Promise<boolean>;
+    openSelectKey: () => Promise<void>;
+  }
+  interface Window {
+    aistudio?: AIStudio;
+  }
+}
 
 const App: React.FC = () => {
   const [appState, setAppState] = useState<AppState>(AppState.IDLE);
@@ -21,48 +33,86 @@ const App: React.FC = () => {
     null,
   );
   const [lastVideoBlob, setLastVideoBlob] = useState<Blob | null>(null);
+  const [isApiKeySelected, setIsApiKeySelected] = useState(false);
 
   // A single state to hold the initial values for the prompt form
   const [initialFormValues, setInitialFormValues] =
     useState<GenerateVideoParams | null>(null);
 
-  const handleGenerate = useCallback(async (params: GenerateVideoParams) => {
-    setAppState(AppState.LOADING);
-    setErrorMessage(null);
-    setLastConfig(params);
-    // Reset initial form values for the next fresh start
-    setInitialFormValues(null);
-
-    try {
-      const {url, blob} = await generateVideo(params);
-      setVideoUrl(url);
-      setLastVideoBlob(blob);
-      setAppState(AppState.SUCCESS);
-    } catch (error) {
-      console.error('Video generation failed:', error);
-      const errorMessage =
-        error instanceof Error ? error.message : 'An unknown error occurred.';
-
-      let userFriendlyMessage = `Video generation failed: ${errorMessage}`;
-
-      if (typeof errorMessage === 'string') {
-        if (errorMessage.includes('Requested entity was not found.')) {
-          userFriendlyMessage =
-            'Model not found. This can be caused by an invalid API key or permission issues. Please check your API_KEY environment variable.';
-        } else if (
-          errorMessage.includes('API_KEY_INVALID') ||
-          errorMessage.includes('API key not valid') ||
-          errorMessage.toLowerCase().includes('permission denied')
-        ) {
-          userFriendlyMessage =
-            'Your API key is invalid or lacks permissions. Please check your API_KEY environment variable and ensure billing is enabled for your project.';
-        }
+  useEffect(() => {
+    const checkApiKey = async () => {
+      if (window.aistudio) {
+        const hasKey = await window.aistudio.hasSelectedApiKey();
+        setIsApiKeySelected(hasKey);
+      } else {
+        // If aistudio is not available, we assume the API key is set in the environment.
+        // The generateVideo call will fail with a clear message if it's not.
+        setIsApiKeySelected(true);
       }
+    };
+    checkApiKey();
+  }, []);
 
-      setErrorMessage(userFriendlyMessage);
-      setAppState(AppState.ERROR);
+  const handleSelectKey = useCallback(async () => {
+    if (window.aistudio) {
+      await window.aistudio.openSelectKey();
+      // Assume success and update state to unblock UI, per guidelines
+      setIsApiKeySelected(true);
     }
   }, []);
+
+  const handleGenerate = useCallback(
+    async (params: GenerateVideoParams) => {
+      if (!isApiKeySelected) {
+        setErrorMessage('Please select an API key before generating a video.');
+        setAppState(AppState.ERROR);
+        return;
+      }
+
+      setAppState(AppState.LOADING);
+      setErrorMessage(null);
+      setLastConfig(params);
+      // Reset initial form values for the next fresh start
+      setInitialFormValues(null);
+
+      try {
+        const {url, blob} = await generateVideo(params);
+        setVideoUrl(url);
+        setLastVideoBlob(blob);
+        setAppState(AppState.SUCCESS);
+      } catch (error) {
+        console.error('Video generation failed:', error);
+        const errorMessage =
+          error instanceof Error ? error.message : 'An unknown error occurred.';
+
+        let userFriendlyMessage = `Video generation failed: ${errorMessage}`;
+
+        const isApiKeyError = (message: string) => {
+          return (
+            message.includes('API_KEY') ||
+            message.includes('API key') ||
+            message.toLowerCase().includes('permission denied') ||
+            message.includes('Requested entity was not found.')
+          );
+        };
+
+        if (typeof errorMessage === 'string' && isApiKeyError(errorMessage)) {
+          if (window.aistudio) {
+            userFriendlyMessage =
+              'There was an issue with your API key. It might be invalid, lack permissions, or billing may not be enabled. Please select a valid key and try again.';
+            setIsApiKeySelected(false); // Re-prompt for key selection
+          } else {
+            userFriendlyMessage =
+              'Your API_KEY environment variable appears to be invalid or missing permissions. Please check it and ensure billing is enabled for your project.';
+          }
+        }
+
+        setErrorMessage(userFriendlyMessage);
+        setAppState(AppState.ERROR);
+      }
+    },
+    [isApiKeySelected],
+  );
 
   const handleRetry = useCallback(() => {
     if (lastConfig) {
@@ -129,6 +179,10 @@ const App: React.FC = () => {
       </button>
     </div>
   );
+
+  if (!isApiKeySelected) {
+    return <ApiKeyDialog onContinue={handleSelectKey} />;
+  }
 
   return (
     <div className="h-screen bg-black text-gray-200 flex flex-col font-sans overflow-hidden">
