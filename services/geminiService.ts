@@ -9,14 +9,13 @@ import {
 } from '@google/genai';
 import {GenerateVideoParams, GenerationMode, ImageFile} from '../types';
 
-// Fix: API key is now handled by process.env.API_KEY, so it's removed from parameters.
 export const generateVideo = async (
   params: GenerateVideoParams,
 ): Promise<{url: string; blob: Blob}> => {
   console.log('Starting video generation with params:', params);
 
-  // Fix: API key must be obtained from process.env.API_KEY as per guidelines.
-  const ai = new GoogleGenAI({apiKey: process.env.API_KEY});
+  // Let the SDK handle API key retrieval from the environment automatically.
+  const ai = new GoogleGenAI({});
 
   const generateVideoPayload: any = {
     model: params.model,
@@ -124,8 +123,8 @@ export const generateVideo = async (
     const url = decodeURIComponent(firstVideo.video.uri);
     console.log('Fetching video from:', url);
 
-    // Fix: The API key for fetching the video must also come from process.env.API_KEY.
-    const res = await fetch(`${url}&key=${process.env.API_KEY}`);
+    // The returned URL is pre-signed and should not require an explicit API key.
+    const res = await fetch(url);
 
     if (!res.ok) {
       throw new Error(`Failed to fetch video: ${res.status} ${res.statusText}`);
